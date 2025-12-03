@@ -1,6 +1,6 @@
 // --- IMPORTS ---
 // We are bringing in specific tools from the libraries we installed.
-use kube::{Api, Client, api::{ListParams, WatchEvent}};
+use kube::{Api, Client, api::{WatchEvent, WatchParams}};
 use futures::StreamExt;
 
 
@@ -31,24 +31,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Define the API we want to talk to
     // We want to talk to 'Pods' in the 'kube-system' namespace.
     // The syntax '<Pod>' is a Generic. It tells the compiler: "This API expects Pod objects, not Services or Nodes."
-    let pods: Api<Pod> = Api::namespaced(client, "kube-system");
+    let pods: Api<Pod> = Api::namespaced(client, "default");
 
-    // ListParams::default() means "Give me everything, no filters yet."
-    let lp = ListParams::default();
+
     
-    println!("✅ Connection successful! Listing system pods:");
+    // 1. create the Watch stream.
+    // "0" is the resource version. it means give me all the events starting now.
+    // .boxed() just wraps the complicated type into a box.
+    let wp = WatchParams::default();
+    println!("👀 Watching for Pods in 'default' namespace...");
+    let mut stream = pods.watch(&wp, "0").await?.boxed();
 
-    // 4. The Loop
-    // pods.list(&lp).await? -> Fetch the list from the server (pause until done).
-    // 'for p in ...' -> Iterate over every pod found.
-    for p in pods.list(&lp).await? {
-        // p.metadata.name is an "Option". It might be something (Some) or nothing (None).
-        // .unwrap_or_default() says: "If the name is missing, just give me an empty string. Don't crash."
-        println!("   - Found Pod: {}", p.metadata.name.unwrap_or_default());
+    // 2. the infinite loop
+    // while let  is a loop that runs as long as the stream is open.
+    while let Some(status) = stream.next().await {
+        // if a pod is modified, or added. 
+        match status {
+        Ok(WatchEvent::Added(pod)) | Ok(WatchEvent::Modified(pod)) => {
+            let name = pod.metadata.name.clone().unwrap_or_default();
+           // check if the pod has annotations (metadata)
+           if let Some(annotations) = pod.metadata.annotations {
+            // 2. check if it is our one specific  "contract" annotation
+            if let Some(dataset_url) = annotations.get("x-openai/required-dataset") {
+                println!("TRIGGER: Pod '{}' needs data from: {}",name, dataset_url);
+                // this is where we will trigger the download of the dataset.
+                
+            }
+           }
+           
+        },
+        // if we lose the connection
+        Ok(WatchEvent::Error(e)) => println!("Error: {}", e),
+        // ignore other events like de.
+        _ => {}
+
     }
-
-    // Return "Ok". 
-    // In Rust, the last line of a function (without a semicolon) is the return value.
-    // () is called a "Unit", basically meaning "void" or "nothing useful, but not an error."
+    }
     Ok(())
 }
