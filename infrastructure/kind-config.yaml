@@ -1,0 +1,24 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  # Node 1: The "Boss" (Control Plane). It manages the others.
+  - role: control-plane
+  
+  # Node 2: The "GPU" Node.
+  # We use "kubeadmConfigPatches" to inject fake labels.
+  - role: worker
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "accelerator=nvidia-h100" 
+  
+  # Node 3: A boring Standard Node.
+  - role: worker
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "accelerator=cpu"
