@@ -18,8 +18,8 @@ In AI/ML infrastructure, GPU idle time is the most expensive resource leak. When
 - [x] Successfully list and monitor existing Pods.
 
 ### 🔜 Phase 2: The Watcher
-- [ ] Upgrade Operator to "Watch Mode" (Stream API).
-- [ ] Detect Pods with specific `x-openai/required-dataset` annotations.
+- [x] Upgrade Operator to "Watch Mode" (Stream API).
+- [x] Detect Pods with specific `x-openai/required-dataset` annotations.
 
 ### 🔮 Phase 3: The Interceptor
 - [ ] Implement MutatingAdmissionWebhook to "pause" Pods.
