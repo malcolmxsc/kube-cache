@@ -1,7 +1,8 @@
 // --- IMPORTS ---
 // We are bringing in specific tools from the libraries we installed.
-use kube::{Api, Client, api::{WatchEvent, WatchParams}};
+use kube::{Api, Client, api::{WatchEvent, WatchParams, Patch, PatchParams}};
 use futures::StreamExt;
+use serde_json::json; // for patching json.
 
 
 use k8s_openapi::api::core::v1::Pod;
@@ -12,60 +13,65 @@ use k8s_openapi::api::core::v1::Pod;
 // Rust's default 'main' function cannot be asynchronous (it can't wait for network requests).
 // This macro wraps our function in a runtime that CAN wait for network requests.
 #[tokio::main]
-
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    
-    // 1. Initialize Logging
-    // This turns on the printing tools so we can see output in the terminal.
     tracing_subscriber::fmt::init();
-
-    println!("🚀 Kube-Cache Operator is starting...");
-
-    // 2. Connect to Kubernetes
-    // 'let' defines a variable.
-    // 'Client::try_default()' tries to find your ~/.kube/config file.
-    // '.await' means: "Pause this line until the connection is ready."
-    // '?' means: "If this FAILS, stop the program and print the error. If it SUCCEEDS, give me the client."
     let client = Client::try_default().await?;
-
-    // 3. Define the API we want to talk to
-    // We want to talk to 'Pods' in the 'kube-system' namespace.
-    // The syntax '<Pod>' is a Generic. It tells the compiler: "This API expects Pod objects, not Services or Nodes."
     let pods: Api<Pod> = Api::namespaced(client, "default");
-
-
     
-    // 1. create the Watch stream.
-    // "0" is the resource version. it means give me all the events starting now.
-    // .boxed() just wraps the complicated type into a box.
+    // The "Lock" name we are looking for
+    let gate_name = "kube-cache.openai.com/gate";
+
     let wp = WatchParams::default();
-    println!("👀 Watching for Pods in 'default' namespace...");
+    println!("🛡️  Kube-Cache Gatekeeper Online. Waiting for Gated Pods...");
+
     let mut stream = pods.watch(&wp, "0").await?.boxed();
 
-    // 2. the infinite loop
-    // while let  is a loop that runs as long as the stream is open.
     while let Some(status) = stream.next().await {
-        // if a pod is modified, or added. 
         match status {
-        Ok(WatchEvent::Added(pod)) | Ok(WatchEvent::Modified(pod)) => {
-            let name = pod.metadata.name.clone().unwrap_or_default();
-           // check if the pod has annotations (metadata)
-           if let Some(annotations) = pod.metadata.annotations {
-            // 2. check if it is our one specific  "contract" annotation
-            if let Some(dataset_url) = annotations.get("x-openai/required-dataset") {
-                println!("TRIGGER: Pod '{}' needs data from: {}",name, dataset_url);
-                // this is where we will trigger the download of the dataset.
+            Ok(WatchEvent::Added(pod)) | Ok(WatchEvent::Modified(pod)) => {
+                let name = pod.metadata.name.clone().unwrap_or_default();
                 
-            }
-           }
-           
-        },
-        // if we lose the connection
-        Ok(WatchEvent::Error(e)) => println!("Error: {}", e),
-        // ignore other events like de.
-        _ => {}
+                // 1. Check if the Pod is "Gated" (Waiting for us)
+                // We look inside pod.spec.scheduling_gates
+                let has_gate = pod.spec.as_ref()
+                    .and_then(|s| s.scheduling_gates.as_ref())
+                    .map(|gates| gates.iter().any(|g| g.name == gate_name))
+                    .unwrap_or(false);
 
+                if has_gate {
+                    println!("\n🔒 LOCKED Pod Detected: {}", name);
+                    
+                    // 2. Check WHICH data it needs
+                    if let Some(annotations) = pod.metadata.annotations {
+                        if let Some(data_url) = annotations.get("x-openai/required-dataset") {
+                            println!("   📦 Target Data: {}", data_url);
+                            println!("   ⏳ Downloading Data (Simulation)...");
+                            
+                            // SIMULATION: Wait 2 seconds to pretend we are downloading 500GB
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            
+                            println!("   ✅ Download Complete. Unlocking Pod...");
+
+                            // 3. THE ACTION: Remove the Gate
+                            // We send a JSON Patch to delete the scheduling gate
+                            let patch = json!({
+                                "spec": {
+                                    "schedulingGates": [] 
+                                }
+                            });
+                            
+                            let pp = PatchParams::default();
+                            pods.patch(&name, &pp, &Patch::Merge(patch)).await?;
+                            
+                            println!("   🚀 Pod '{}' Released to Scheduler!", name);
+                        }
+                    }
+                }
+            },
+            Ok(WatchEvent::Error(e)) => println!("Error: {}", e),
+            _ => {}
+        }
     }
-    }
+
     Ok(())
 }
