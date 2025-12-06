@@ -1,0 +1,4 @@
+[tasks.build-ebpf]
+command = "cargo"
+args = ["build", "--release", "--target=bpfel-unknown-none", "-Z", "build-std=core"]
+cwd = "sentry-ebpf"
