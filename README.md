@@ -22,12 +22,12 @@ In AI/ML infrastructure, GPU idle time is the most expensive resource leak. When
 - [x] Detect Pods with specific `x-openai/required-dataset` annotations.
 
 ### 🔮 Phase 3: The Interceptor
-- [ ] Implement MutatingAdmissionWebhook to "pause" Pods.
-- [ ] Logic to check if data exists on the node.
+- [x] Implement MutatingAdmissionWebhook to "pause" Pods.
+- [x] Logic to check if data exists on the node.
 
 ### 🚀 Phase 4: The Action
-- [ ] Spawn "Data Fetcher" jobs to pull from S3/MinIO.
-- [ ] Mount hostPath volumes to the GPU Pod.
+- [x] Spawn "Data Fetcher" jobs to pull from S3/MinIO.
+- [x] Mount hostPath volumes to the GPU Pod.
 
 ## 💻 How to Run (Dev)
 1. `kind create cluster --config infrastructure/kind-config.yaml`
