@@ -98,18 +98,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .and_then(|s| s.node_name.as_deref())
                                 .unwrap_or("kind-worker");
 
+    
                             // Run the Fetcher Job
                             let pod_uid = pod.metadata.uid.as_deref().unwrap_or_default();
                             
-                            // (We log inside this function too)
-                            spawn_fetcher_job(client.clone(), data_url, node_target, &name, pod_uid).await?;
-                          
+                            // 1. Construct a file path to check (Simulation Logic)
+                            // We treat the filename as the "cache key"
+                            let filename = data_url.replace("s3://", "").replace("/", "-");
+                            let file_path = format!("/tmp/{}", filename);
+
+                            // 2. The Logic: Hit vs Miss
+                            if std::path::Path::new(&file_path).exists() {
+                                // --- CACHE HIT ---
+                                info!(event = "cache_hit", pod_name = %name, path = %file_path, "Dataset found locally");
+                                metrics_state.count_hit();
+                                
+                            } else {
+                                // --- CACHE MISS ---
+                                info!(event = "cache_miss", pod_name = %name, path = %file_path, "Downloading dataset");
+                                metrics_state.count_miss();
+
+                                // A. Start Timer
+                                let start = std::time::Instant::now();
+
+                                // B. Do the "Download" (Spawn the K8s Job)
+                                spawn_fetcher_job(client.clone(), data_url, node_target, &name, pod_uid).await?;
+
+                                // C. Stop Timer & Record
+                                let duration = start.elapsed().as_secs_f64();
+                                metrics_state.observe_warmup(duration);
+
+                                // D. Create the dummy file so next time it counts as a HIT (Simulation)
+                                if let Ok(_) = std::fs::File::create(&file_path) {
+                                    info!(event = "cache_update", path = %file_path, "Cache updated on disk");
+                                }
+                            }
+
                             // LOG 5: Data Ready
                             info!(event = "data_ready", pod_name = %name, "Data ready on disk");
-
-                            // --- RECORD THE WIN ---
-                            metrics_state.record_prewarm_success(data_url);
-                            // ---------------------
+                                
 
                             let patch = json!({
                                 "spec": {

@@ -1,26 +1,42 @@
-# 🚀 Kube-Cache: The GPU Data Pre-Warmer
+# ⚡ Kube-Cache: The GPU Data Pre-Warmer
 
-**Status:** 🚧 In Development (Phase 1 Complete)
+**Status:** ✅ Complete (v1.0)  
 **Tech Stack:** Rust, Kubernetes (Kind), Tokio, Kube-rs
 
-## 💡 The Problem
-In AI/ML infrastructure, GPU idle time is the most expensive resource leak. When a training job starts, it often sits idle at 0% GPU utilization while waiting for terabytes of training data to download from S3.
+## 💡 The Problem: The "GPU Tax"
+In deep learning infrastructure, the most expensive resource is GPU time (approx. $4/hr for an H100). 
+When a training Pod starts, it typically spends the first 10-30 minutes initializing and downloading terabytes of datasets from object storage (S3/GCS).
+
+**The Result:** The GPU sits idle at 0% utilization while the meter is running. This "Data Loading Tax" wastes millions of dollars annually at scale.
 
 ## 🛠 The Solution
-**Kube-Cache** is a custom Kubernetes Operator that intercepts Pod scheduling. It pauses the GPU Pod, pre-fetches the required dataset to a local NVMe cache on the node, and *then* releases the Pod.
+**Kube-Cache** is a Kubernetes Operator written in Rust that eliminates this idle time using the **Delegation Pattern**.
 
-**Result:** 0% GPU Idle time. Training starts instantly.
+It intercepts Pods before they are scheduled, delegates the data fetching to a cheap CPU-based worker, and only schedules the GPU Pod once the data is locally available on NVMe.
 
-## 🗺 Architecture & Roadmap
-### ✅ Phase 1: The Foundation
-- [x] Set up local development environment (Kind Cluster with simulated GPUs).
-- [x] Implement Rust-based connection to Kubernetes API.
-- [x] Successfully list and monitor existing Pods.
+### Architecture
+[User submits Pod] 
+       ⬇
+[🚫 Scheduling Gate] (Pod is stuck in Pending)
+       ⬇
+[🤖 Kube-Cache Operator] (Detects Gated Pod)
+       ⬇
+[🚜 Spawns Fetcher Job] (Cheap CPU Worker downloads S3 data to hostPath)
+       ⬇
+[✅ Job Complete] 
+       ⬇
+[🔓 Gate Removed] (Pod is released to Scheduler)
+       ⬇
+[🚀 GPU Pod Starts] (Data is already on disk. Training starts instantly.)
 
-### 🔜 Phase 2: The Watcher
-- [x] Upgrade Operator to "Watch Mode" (Stream API).
-- [x] Detect Pods with specific `x-openai/required-dataset` annotations.
+## 🚀 Features Implemented
+- **Rust-based Operator:** Uses `kube-rs` for high-performance, type-safe control loops.
+- **Scheduling Gates:** leverages K8s v1.26+ API to non-destructively pause pod scheduling.
+- **Job Delegation:** Spawns ephemeral `batch/v1` Jobs to handle data transfer, keeping the Operator lightweight.
+- **Smart Node Targeting:** Ensures the Fetcher Job runs on the exact same node that the GPU Pod will eventually occupy.
+- **Contract-Based Trigger:** Activates only when the `x-openai/required-dataset` annotation is present.
 
+<<<<<<< Updated upstream
 ### 🔮 Phase 3: The Interceptor
 - [x] Implement MutatingAdmissionWebhook to "pause" Pods.
 - [x] Logic to check if data exists on the node.
@@ -32,3 +48,11 @@ In AI/ML infrastructure, GPU idle time is the most expensive resource leak. When
 ## 💻 How to Run (Dev)
 1. `kind create cluster --config infrastructure/kind-config.yaml`
 2. `cargo run`
+=======
+## 💻 How to Run (Local Simulation)
+
+### 1. Start the Cluster
+```bash
+kind create cluster --config infrastructure/kind-config.yaml
+```
+>>>>>>> Stashed changes
