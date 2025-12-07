@@ -5,6 +5,10 @@ use k8s_openapi::api::batch::v1::Job;
 use futures::StreamExt;
 use serde_json::json;
 
+// NEW: Logging Imports
+use tracing::{info, error, Level};
+use tracing_subscriber::FmtSubscriber;
+
 // NEW: Metrics Imports
 mod metrics;
 use metrics::MetricsState;
@@ -13,28 +17,24 @@ use std::net::SocketAddr;
 use prometheus::{Encoder, TextEncoder};
 
 // --- METRICS SERVER ---
-// This function serves the HTTP request when Prometheus comes knocking
 async fn metrics_handler(State(state): State<MetricsState>) -> String {
     let encoder = TextEncoder::new();
-    
-    // Gather from 'state.registry'
     let metric_families = state.registry.gather();
-    
     let mut result = Vec::new();
     encoder.encode(&metric_families, &mut result).unwrap();
     String::from_utf8(result).unwrap()
 }
 
-// Spawns the server on port 8080
 async fn start_metrics_server(state: MetricsState) {
     let app = Router::new()
         .route("/metrics", get(metrics_handler))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
-    println!("📊 Metrics Server listening on http://{}", addr);
     
-    // Start the server
+    // LOG 1: Server Start (Structured)
+    info!(event = "server_start", port = 8080, "Metrics Server listening");
+    
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
@@ -42,12 +42,22 @@ async fn start_metrics_server(state: MetricsState) {
 // --- MAIN OPERATOR LOOP ---
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    // 1. INITIALIZE JSON LOGGING (The "Black Box" Recorder)
+    let subscriber = FmtSubscriber::builder()
+        .json()                 // Output as JSON
+        .with_max_level(Level::INFO)
+        .with_current_span(false)
+        .with_file(true)        // Log which file the message came from
+        .with_line_number(true) // Log the exact line number
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default subscriber failed");
     
-    // 1. Initialize the Observability Layer
+    // 2. Initialize the Observability Layer
     let metrics_state = MetricsState::new();
     
-    // 2. Spawn the Web Server in the background (Non-blocking)
+    // 3. Spawn the Web Server
     let server_state = metrics_state.clone();
     tokio::spawn(async move {
         start_metrics_server(server_state).await;
@@ -58,7 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let gate_name = "kube-cache.openai.com/gate";
     let wp = WatchParams::default();
-    println!("🛡️  Kube-Cache Gatekeeper Online. Waiting for Gated Pods...");
+
+    // LOG 2: Operator Online
+    info!(event = "startup", version = env!("CARGO_PKG_VERSION"), "Kube-Cache Gatekeeper Online");
 
     let mut stream = pods.watch(&wp, "0").await?.boxed();
 
@@ -73,12 +85,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or(false);
 
                 if has_gate {
-                    println!("\n🔒 LOCKED Pod Detected: {}", name);
+                    // LOG 3: Detection
+                    info!(event = "pod_locked", pod_name = %name, "Locked Pod Detected");
                     
                     if let Some(annotations) = pod.metadata.annotations {
                         if let Some(data_url) = annotations.get("x-openai/required-dataset") {
-                            println!("   📦 Target Data: {}", data_url);
-                            println!("   ⏳ Downloading Data (Delegation)...");
+                            
+                            // LOG 4: Delegation Start
+                            info!(event = "delegation_start", pod_name = %name, dataset = %data_url, "Delegating download to job");
                             
                             let node_target = pod.spec.as_ref()
                                 .and_then(|s| s.node_name.as_deref())
@@ -86,9 +100,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // Run the Fetcher Job
                             let pod_uid = pod.metadata.uid.as_deref().unwrap_or_default();
+                            
+                            // (We log inside this function too)
                             spawn_fetcher_job(client.clone(), data_url, node_target, &name, pod_uid).await?;
                           
-                            println!("   ✅ Data Ready on Disk. Unlocking Pod...");
+                            // LOG 5: Data Ready
+                            info!(event = "data_ready", pod_name = %name, "Data ready on disk");
 
                             // --- RECORD THE WIN ---
                             metrics_state.record_prewarm_success(data_url);
@@ -103,12 +120,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let pp = PatchParams::default();
                             pods.patch(&name, &pp, &Patch::Merge(patch)).await?;
                             
-                            println!("   🚀 Pod '{}' Released to Scheduler!", name);
+                            // LOG 6: Release
+                            info!(event = "pod_release", pod_name = %name, "Pod released to scheduler");
                         }
                     }
                 }
             },
-            Ok(WatchEvent::Error(e)) => println!("Error: {}", e),
+            Ok(WatchEvent::Error(e)) => error!(error = ?e, "Watch stream error"),
             _ => {}
         }
     }
@@ -120,7 +138,8 @@ async fn spawn_fetcher_job(client: Client, data_url: &str, node_name: &str, pod_
     let jobs: Api<Job> = Api::namespaced(client, "default");
     let job_name = format!("fetcher-{}", data_url.replace("s3://","").replace("/", "-"));
 
-    println!("   🚜 Spawning Fetcher Job {} on node {}...", job_name, node_name);
+    // LOG 7: Spawning Job
+    info!(event = "job_spawn", job_name = %job_name, node = %node_name, "Spawning fetcher job");
 
     let job_json = json!({
         "apiVersion": "batch/v1",
@@ -156,7 +175,8 @@ async fn spawn_fetcher_job(client: Client, data_url: &str, node_name: &str, pod_
         jobs.create(&PostParams::default(), &serde_json::from_value(job_json)?).await?;
     }
 
-    println!("   📊 Waiting for Download {} to finish...", job_name);
+    // LOG 8: Waiting
+    info!(event = "job_wait", job_name = %job_name, "Waiting for download to finish");
 
     loop {
         let job = jobs.get(&job_name).await?;
