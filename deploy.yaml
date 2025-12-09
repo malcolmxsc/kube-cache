@@ -45,7 +45,7 @@ spec:
       serviceAccountName: kube-cache-sa
       containers:
         - name: kube-cache
-          image: kube-cache:v3
+          image: kube-cache:v4
           imagePullPolicy: Never # Use the local image we loaded into Kind
           env:
             # HERE IS THE MAGIC SWITCH
