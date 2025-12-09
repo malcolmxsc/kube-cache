@@ -175,9 +175,16 @@ async fn download_file_from_s3(target_path: &str) -> Result<(), Box<dyn std::err
     let region_provider = RegionProviderChain::default_provider().or_else(Region::new("us-east-1"));
 
     // 2. Load Base Config
+    // 2. Determine Endpoint (Env Var for K8s, Localhost for Mac)
+    let s3_endpoint = std::env::var("S3_ENDPOINT")
+        .unwrap_or_else(|_| "http://localhost:9000".to_string());
+
+    info!(event = "config_check", endpoint = %s3_endpoint, "Connecting to S3 Storage");
+
+    // 3. Load Base Config
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(region_provider)
-        .endpoint_url("http://localhost:9000")
+        .endpoint_url(&s3_endpoint) // <--- THE FIX
         .load()
         .await;
 
