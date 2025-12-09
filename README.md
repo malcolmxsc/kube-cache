@@ -18,14 +18,14 @@ It intercepts Pods *before* they are scheduled, downloads the data to the node's
 ### 🏗 Architecture
 ```mermaid
 graph TD
-    User[User Submits Pod] -->|Annotation Detected| Gate[🚫 Scheduling Gate]
-    Gate -->|Pending State| Operator[🤖 Kube-Cache Operator]
-    Operator -->|Check Local Cache| CacheCheck{Data on Disk?}
-    CacheCheck -->|No| Download[⬇️ Async S3 Streamer]
+    User["User Submits Pod"] -->|Annotation Detected| Gate["🚫 Scheduling Gate"]
+    Gate -->|Pending State| Operator["🤖 Kube-Cache Operator"]
+    Operator -->|Check Local Cache| CacheCheck{"Data on Disk?"}
+    CacheCheck -->|No| Download["⬇️ Async S3 Streamer"]
     CacheCheck -->|Yes| Release
-    Download -->|Stream to NVMe| Disk[(Local Disk)]
-    Disk --> Release[🔓 Remove Gate]
-    Release -->|Schedule| GPU[🚀 GPU Pod Starts (Instant Access)]
+    Download -->|Stream to NVMe| Disk[("Local Disk")]
+    Disk --> Release["🔓 Remove Gate"]
+    Release -->|Schedule| GPU["🚀 GPU Pod Starts (Instant Access)"]
 ```
 
 ### 🚀 Key Engineering Features
