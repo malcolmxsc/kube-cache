@@ -3,7 +3,70 @@ kind: Namespace
 metadata:
   name: monitoring
 ---
-# --- 1. TEMPO (The Trace Store) ---
+# ==========================================
+# 1. PROMETHEUS SERVER (The Metrics Database)
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-server
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: prometheus-server
+  template:
+    metadata:
+      labels:
+        app: prometheus-server
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config-volume
+              mountPath: /etc/prometheus/
+      volumes:
+        - name: prometheus-config-volume
+          configMap:
+            name: prometheus-server-conf
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-server-conf
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s 
+      evaluation_interval: 5s
+
+    scrape_configs:
+      # Scrape the Kube-Cache Operator (Your Rust App in default ns)
+      - job_name: 'kube-cache'
+        static_configs:
+          - targets: ['kube-cache.default.svc.cluster.local:8080']
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-server
+  namespace: monitoring
+spec:
+  selector:
+    app: prometheus-server
+  ports:
+    - port: 80
+      targetPort: 9090
+---
+# ==========================================
+# 2. TEMPO (The Trace Store)
+# ==========================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,8 +86,8 @@ spec:
           image: grafana/tempo:latest
           args: ["-config.file=/etc/tempo.yaml"]
           ports:
-            - containerPort: 4317 # OTLP gRPC (Rust sends data here)
-            - containerPort: 3200 # HTTP (Grafana reads data here)
+            - containerPort: 4317 # OTLP gRPC
+            - containerPort: 3200 # HTTP
           volumeMounts:
             - name: tempo-conf
               mountPath: /etc/tempo.yaml
@@ -68,7 +131,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: tempo
-  namespace: monitoring # Note: We need a Service in 'default' too for cross-namespace talk
+  namespace: monitoring
 spec:
   selector:
     app: tempo
@@ -80,7 +143,9 @@ spec:
       port: 3200
       targetPort: 3200
 ---
-# --- 2. GRAFANA (The Dashboard) ---
+# ==========================================
+# 3. GRAFANA (The Dashboard) -- UPDATED
+# ==========================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -123,17 +188,17 @@ data:
   datasources.yaml: |
     apiVersion: 1
     datasources:
+    # ADDED PROMETHEUS HERE
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus-server.monitoring.svc.cluster.local:80
+      isDefault: true
+    # TEMPO REMAINS
     - name: Tempo
       type: tempo
       access: proxy
-      orgId: 1
       url: http://tempo.monitoring.svc.cluster.local:3200
-      basicAuth: false
-      isDefault: true
-      version: 1
-      editable: false
-      apiVersion: 1
-      uid: tempo
 ---
 apiVersion: v1
 kind: Service
@@ -147,9 +212,10 @@ spec:
     - port: 80
       targetPort: 3000
 ---
-# --- 3. BRIDGE (Allow Default Namespace to Talk to Monitoring) ---
-# Your Rust app is in 'default', Tempo is in 'monitoring'
-# This Service makes "http://tempo:4317" work in 'default'
+# ==========================================
+# 4. BRIDGES & SERVICES
+# ==========================================
+# Allow 'default' namespace to talk to 'monitoring' namespace (Tempo)
 apiVersion: v1
 kind: Service
 metadata:
@@ -160,3 +226,17 @@ spec:
   externalName: tempo.monitoring.svc.cluster.local
   ports:
     - port: 4317
+---
+# Expose the Rust App so Prometheus can scrape it
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-cache
+  namespace: default
+spec:
+  selector:
+    app: kube-cache
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
