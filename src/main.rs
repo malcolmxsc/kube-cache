@@ -1,9 +1,15 @@
 // --- IMPORTS ---
-use kube::{Api, Client, api::{WatchEvent, WatchParams, Patch, PatchParams, PostParams}};
+use kube::{Api, Client, api::{WatchEvent, WatchParams, Patch, PatchParams}};
 use k8s_openapi::api::core::v1::Pod;
-use k8s_openapi::api::batch::v1::Job;
+// use k8s_openapi::api::batch::v1::Job; // Removed unused import
 use futures::StreamExt;
 use serde_json::json;
+
+// --- NEW IMPORTS FOR S3 ---
+use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_s3::{Client as S3Client, config::Region};
+use std::fs::File;
+use std::io::Write;
 
 // NEW: Logging Imports
 use tracing::{info, error, Level};
@@ -94,16 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // LOG 4: Delegation Start
                             info!(event = "delegation_start", pod_name = %name, dataset = %data_url, "Delegating download to job");
                             
-                            let node_target = pod.spec.as_ref()
-                                .and_then(|s| s.node_name.as_deref())
-                                .unwrap_or("kind-worker");
-
-    
-                            // Run the Fetcher Job
-                            let pod_uid = pod.metadata.uid.as_deref().unwrap_or_default();
-                            
-                            // 1. Construct a file path to check (Simulation Logic)
-                            // We treat the filename as the "cache key"
+                            // 1. Construct a file path to check
                             let filename = data_url.replace("s3://", "").replace("/", "-");
                             let file_path = format!("/tmp/{}", filename);
 
@@ -121,17 +118,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // A. Start Timer
                                 let start = std::time::Instant::now();
 
-                                // B. Do the "Download" (Spawn the K8s Job)
-                                spawn_fetcher_job(client.clone(), data_url, node_target, &name, pod_uid).await?;
+                                // B. Do the "Download" (REAL S3 Download)
+                                info!(event = "download_start", path = %file_path, "Starting real S3 download...");
+                                
+                                // Call the function we pasted at the bottom
+                                if let Err(e) = download_file_from_s3(&file_path).await {
+                                    error!(event = "download_error", error = ?e, "Failed to download from S3");
+                                    // In a real app, you might want to retry or crash here
+                                }
 
                                 // C. Stop Timer & Record
                                 let duration = start.elapsed().as_secs_f64();
                                 metrics_state.observe_warmup(duration);
-
-                                // D. Create the dummy file so next time it counts as a HIT (Simulation)
-                                if let Ok(_) = std::fs::File::create(&file_path) {
-                                    info!(event = "cache_update", path = %file_path, "Cache updated on disk");
-                                }
                             }
 
                             // LOG 5: Data Ready
@@ -161,59 +159,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn spawn_fetcher_job(client: Client, data_url: &str, node_name: &str, pod_name: &str, pod_uid: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let jobs: Api<Job> = Api::namespaced(client, "default");
-    let job_name = format!("fetcher-{}", data_url.replace("s3://","").replace("/", "-"));
 
-    // LOG 7: Spawning Job
-    info!(event = "job_spawn", job_name = %job_name, node = %node_name, "Spawning fetcher job");
+// NEW: Real S3 Download Function
+async fn download_file_from_s3(target_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Setup AWS Configuration (pointing to MinIO)
+    let region_provider = RegionProviderChain::default_provider().or_else(Region::new("us-east-1"));
+    let config = aws_config::from_env()
+        .region(region_provider)
+        .endpoint_url("http://localhost:9000") // Connects to your MinIO Port-Forward
+        .load()
+        .await;
 
-    let job_json = json!({
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "metadata": {
-            "name": job_name,
-            "ownerReferences": [{
-                "apiVersion": "v1",
-                "kind": "Pod",
-                "name": pod_name,
-                "uid": pod_uid,
-                "controller": true,
-                "blockOwnerDeletion": true
-            }]
-        },
-        "spec": {
-            "ttlSecondsAfterFinished": 30, 
-            "template": {
-                "spec": {
-                    "nodeName": node_name, 
-                    "restartPolicy": "Never",
-                    "containers": [{
-                        "name": "downloader",
-                        "image": "alpine", 
-                        "command": ["sh", "-c", "echo 'Downloading specific dataset...'; sleep 5; echo 'Done!'"]
-                    }]
-                }
-            }
-        }
-    });
+    // 2. Create the Client
 
-    if jobs.get(&job_name).await.is_err() {
-        jobs.create(&PostParams::default(), &serde_json::from_value(job_json)?).await?;
+    let client = S3Client::new(&config);
+
+    // 3. The Download Request
+    let bucket = "models";
+    let key = "gpt-4-weights"; // The file you just uploaded
+
+    info!(event = "s3_start", bucket = %bucket, key = %key, "Starting S3 download stream");
+
+    let mut resp = client
+        .get_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await?;
+
+    // 4. Stream the Data to Disk
+    let mut file = File::create(target_path)?;
+    
+    while let Some(bytes) = resp.body.try_next().await? {
+        file.write_all(&bytes)?;
     }
 
-    // LOG 8: Waiting
-    info!(event = "job_wait", job_name = %job_name, "Waiting for download to finish");
-
-    loop {
-        let job = jobs.get(&job_name).await?;
-        if let Some(status) = job.status {
-            if let Some(succeeded) = status.succeeded {
-                if succeeded > 0 { break; } 
-            }
-        }
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
-
+    info!(event = "s3_complete", path = %target_path, "Download finished successfully");
     Ok(())
 }

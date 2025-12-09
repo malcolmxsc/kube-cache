@@ -7,6 +7,9 @@ edition = "2021"
 # CORE FIX: We updated this from 0.22 -> 0.26.0 to match what 'kube' wants
 k8s-openapi = { version = "0.26.0", features = ["v1_30"] }
 
+# AWS / S3 Dependencies
+aws-config = "1.1.7"
+aws-sdk-s3 = "1.17.0"
 
 # Your existing dependencies
 kube = { version = "2.0.1", features = ["runtime", "derive", "client"] }
