@@ -36,17 +36,17 @@ This project uses a push-based approach for traces and a pull-based approach for
 graph LR
     subgraph Kubernetes Cluster
         subgraph Application Namespace
-            App[🦀 Rust App (kube-cache)]
+            App["🦀 Rust App (kube-cache)"]
         end
 
         subgraph Monitoring Namespace
-            Prom[🔥 Prometheus Server]
-            Tempo[⏱️ Tempo Trace Store]
-            Grafana[📊 Grafana Dashboard]
+            Prom["🔥 Prometheus Server"]
+            Tempo["⏱️ Tempo Trace Store"]
+            Grafana["📊 Grafana Dashboard"]
         end
     end
 
-    User[🧑‍💻 User (Browser)] -->|localhost:3000| Grafana
+    User["🧑‍💻 User (Browser)"] -->|localhost:3000| Grafana
 
     %% Metrics Flow (Pull)
     Prom -->|HTTP Scrape /metrics| App
