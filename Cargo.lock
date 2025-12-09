@@ -1704,6 +1704,7 @@ dependencies = [
  "opentelemetry-prometheus",
  "opentelemetry_sdk",
  "prometheus",
+ "rustls 0.23.35",
  "serde",
  "serde_json",
  "tokio",

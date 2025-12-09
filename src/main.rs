@@ -4,6 +4,7 @@ use k8s_openapi::api::core::v1::Pod;
 // use k8s_openapi::api::batch::v1::Job; // Removed unused import
 use futures::StreamExt;
 use serde_json::json;
+use rustls::crypto::ring;
 
 // --- NEW IMPORTS FOR S3 ---
 use aws_config::meta::region::RegionProviderChain;
@@ -48,6 +49,13 @@ async fn start_metrics_server(state: MetricsState) {
 // --- MAIN OPERATOR LOOP ---
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+    // This tells the app: "Use Ring for encryption (to satisfy Kubernetes)"
+    ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+    // ----------------------
+
     // 1. INITIALIZE JSON LOGGING (The "Black Box" Recorder)
     let subscriber = FmtSubscriber::builder()
         .json()                 // Output as JSON
@@ -160,23 +168,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 
+
 // NEW: Real S3 Download Function
 async fn download_file_from_s3(target_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Setup AWS Configuration (pointing to MinIO)
+    // 1. Setup Region Provider (This was missing!)
     let region_provider = RegionProviderChain::default_provider().or_else(Region::new("us-east-1"));
-    let config = aws_config::from_env()
+
+    // 2. Load Base Config
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(region_provider)
-        .endpoint_url("http://localhost:9000") // Connects to your MinIO Port-Forward
+        .endpoint_url("http://localhost:9000")
         .load()
         .await;
 
-    // 2. Create the Client
+    // 3. Force Path Style (The Fix for MinIO)
+    let s3_config = aws_sdk_s3::config::Builder::from(&config)
+        .force_path_style(true) // <--- Use path style (localhost:9000/bucket) instead of domain style
+        .build();
 
-    let client = S3Client::new(&config);
+    let client = S3Client::from_conf(s3_config);
 
-    // 3. The Download Request
+    // 4. The Download Request
     let bucket = "models";
-    let key = "gpt-4-weights"; // The file you just uploaded
+    let key = "gpt-4-weights";
 
     info!(event = "s3_start", bucket = %bucket, key = %key, "Starting S3 download stream");
 
@@ -187,7 +201,7 @@ async fn download_file_from_s3(target_path: &str) -> Result<(), Box<dyn std::err
         .send()
         .await?;
 
-    // 4. Stream the Data to Disk
+    // 5. Stream the Data to Disk
     let mut file = File::create(target_path)?;
     
     while let Some(bytes) = resp.body.try_next().await? {
