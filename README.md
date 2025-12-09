@@ -28,6 +28,40 @@ graph TD
     Release -->|Schedule| GPU["🚀 GPU Pod Starts (Instant Access)"]
 ```
 
+### 📡 Observability Pipeline
+
+This project uses a push-based approach for traces and a pull-based approach for metrics, consolidated in Grafana.
+
+```mermaid
+graph LR
+    subgraph Kubernetes Cluster
+        subgraph Application Namespace
+            App[🦀 Rust App (kube-cache)]
+        end
+
+        subgraph Monitoring Namespace
+            Prom[🔥 Prometheus Server]
+            Tempo[⏱️ Tempo Trace Store]
+            Grafana[📊 Grafana Dashboard]
+        end
+    end
+
+    User[🧑‍💻 User (Browser)] -->|localhost:3000| Grafana
+
+    %% Metrics Flow (Pull)
+    Prom -->|HTTP Scrape /metrics| App
+    Grafana -->|Query Metrics| Prom
+
+    %% Traces Flow (Push)
+    App -->|gRPC OTLP Spans| Tempo
+    Grafana -->|Query Traces| Tempo
+
+    style App fill:#f9f,stroke:#333,stroke-width:2px
+    style Prom fill:#ff9900,stroke:#333,stroke-width:2px
+    style Tempo fill:#66ccff,stroke:#333,stroke-width:2px
+    style Grafana fill:#99ff99,stroke:#333,stroke-width:2px
+```
+
 ### 🚀 Key Engineering Features
 
 1. **High-Performance Rust Core**
