@@ -1,10 +1,16 @@
 // --- IMPORTS ---
 use kube::{Api, Client, api::{WatchEvent, WatchParams, Patch, PatchParams}};
 use k8s_openapi::api::core::v1::Pod;
-// use k8s_openapi::api::batch::v1::Job; // Removed unused import
 use futures::StreamExt;
 use serde_json::json;
 use rustls::crypto::ring;
+
+// IMPORTS FOR SPANS AND TRACES
+use opentelemetry::{KeyValue};
+use opentelemetry_sdk::{trace as sdktrace, Resource};
+// FIXED: Added this back so .with_endpoint() works
+use opentelemetry_otlp::WithExportConfig; 
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
 
 // --- NEW IMPORTS FOR S3 ---
 use aws_config::meta::region::RegionProviderChain;
@@ -13,8 +19,7 @@ use std::fs::File;
 use std::io::Write;
 
 // NEW: Logging Imports
-use tracing::{info, error, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{info, error}; // Removed unused 'Level'
 
 // NEW: Metrics Imports
 mod metrics;
@@ -38,40 +43,59 @@ async fn start_metrics_server(state: MetricsState) {
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
-    
-    // LOG 1: Server Start (Structured)
     info!(event = "server_start", port = 8080, "Metrics Server listening");
     
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
+fn init_telemetry() {
+    // 1. Create the OTLP (OpenTelemetry) Exporter
+    let exporter = opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint("http://tempo:4317"); 
+
+    // 2. Define the Tracer
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(exporter)
+        .with_trace_config(
+            sdktrace::config().with_resource(Resource::new(vec![
+                KeyValue::new("service.name", "kube-cache"), 
+            ])),
+        )
+        .install_batch(opentelemetry_sdk::runtime::Tokio)
+        .expect("Failed to install OTLP tracer");
+
+    // 3. Connect Tracing to Logs (Stdout) AND Traces (Tempo)
+    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+    let logger = tracing_subscriber::fmt::layer().json(); 
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info".into());
+
+    // 4. Register everything
+    Registry::default()
+        .with(env_filter)
+        .with(logger)
+        .with(telemetry)
+        .init();
+}
+
 // --- MAIN OPERATOR LOOP ---
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Initialize Telemetry (Logs + Traces)
+    init_telemetry();
 
-    // This tells the app: "Use Ring for encryption (to satisfy Kubernetes)"
+    // 2. Install Crypto Provider
     ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
-    // ----------------------
 
-    // 1. INITIALIZE JSON LOGGING (The "Black Box" Recorder)
-    let subscriber = FmtSubscriber::builder()
-        .json()                 // Output as JSON
-        .with_max_level(Level::INFO)
-        .with_current_span(false)
-        .with_file(true)        // Log which file the message came from
-        .with_line_number(true) // Log the exact line number
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
-    
-    // 2. Initialize the Observability Layer
+    // 3. Initialize the Observability Layer
     let metrics_state = MetricsState::new();
     
-    // 3. Spawn the Web Server
+    // 4. Spawn the Web Server
     let server_state = metrics_state.clone();
     tokio::spawn(async move {
         start_metrics_server(server_state).await;
@@ -83,7 +107,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gate_name = "kube-cache.openai.com/gate";
     let wp = WatchParams::default();
 
-    // LOG 2: Operator Online
     info!(event = "startup", version = env!("CARGO_PKG_VERSION"), "Kube-Cache Gatekeeper Online");
 
     let mut stream = pods.watch(&wp, "0").await?.boxed();
@@ -99,61 +122,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or(false);
 
                 if has_gate {
-                    // LOG 3: Detection
                     info!(event = "pod_locked", pod_name = %name, "Locked Pod Detected");
                     
                     if let Some(annotations) = pod.metadata.annotations {
                         if let Some(data_url) = annotations.get("x-openai/required-dataset") {
                             
-                            // LOG 4: Delegation Start
                             info!(event = "delegation_start", pod_name = %name, dataset = %data_url, "Delegating download to job");
                             
-                            // 1. Construct a file path to check
                             let filename = data_url.replace("s3://", "").replace("/", "-");
                             let file_path = format!("/tmp/{}", filename);
 
-                            // 2. The Logic: Hit vs Miss
                             if std::path::Path::new(&file_path).exists() {
-                                // --- CACHE HIT ---
                                 info!(event = "cache_hit", pod_name = %name, path = %file_path, "Dataset found locally");
                                 metrics_state.count_hit();
-                                
                             } else {
-                                // --- CACHE MISS ---
                                 info!(event = "cache_miss", pod_name = %name, path = %file_path, "Downloading dataset");
                                 metrics_state.count_miss();
 
-                                // A. Start Timer
                                 let start = std::time::Instant::now();
 
-                                // B. Do the "Download" (REAL S3 Download)
                                 info!(event = "download_start", path = %file_path, "Starting real S3 download...");
                                 
-                                // Call the function we pasted at the bottom
                                 if let Err(e) = download_file_from_s3(&file_path).await {
                                     error!(event = "download_error", error = ?e, "Failed to download from S3");
-                                    // In a real app, you might want to retry or crash here
                                 }
 
-                                // C. Stop Timer & Record
                                 let duration = start.elapsed().as_secs_f64();
                                 metrics_state.observe_warmup(duration);
                             }
 
-                            // LOG 5: Data Ready
                             info!(event = "data_ready", pod_name = %name, "Data ready on disk");
-                                
 
                             let patch = json!({
-                                "spec": {
-                                    "schedulingGates": [] 
-                                }
+                                "spec": { "schedulingGates": [] }
                             });
                             
                             let pp = PatchParams::default();
                             pods.patch(&name, &pp, &Patch::Merge(patch)).await?;
                             
-                            // LOG 6: Release
                             info!(event = "pod_release", pod_name = %name, "Pod released to scheduler");
                         }
                     }
@@ -167,35 +173,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
-
 // NEW: Real S3 Download Function
+#[tracing::instrument(fields(bucket="models", key="gpt-4-weights"))]
 async fn download_file_from_s3(target_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Setup Region Provider (This was missing!)
     let region_provider = RegionProviderChain::default_provider().or_else(Region::new("us-east-1"));
 
-    // 2. Load Base Config
-    // 2. Determine Endpoint (Env Var for K8s, Localhost for Mac)
     let s3_endpoint = std::env::var("S3_ENDPOINT")
         .unwrap_or_else(|_| "http://localhost:9000".to_string());
 
     info!(event = "config_check", endpoint = %s3_endpoint, "Connecting to S3 Storage");
 
-    // 3. Load Base Config
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(region_provider)
-        .endpoint_url(&s3_endpoint) // <--- THE FIX
+        .endpoint_url(&s3_endpoint)
         .load()
         .await;
 
-    // 3. Force Path Style (The Fix for MinIO)
     let s3_config = aws_sdk_s3::config::Builder::from(&config)
-        .force_path_style(true) // <--- Use path style (localhost:9000/bucket) instead of domain style
+        .force_path_style(true)
         .build();
 
     let client = S3Client::from_conf(s3_config);
 
-    // 4. The Download Request
     let bucket = "models";
     let key = "gpt-4-weights";
 
@@ -208,7 +207,6 @@ async fn download_file_from_s3(target_path: &str) -> Result<(), Box<dyn std::err
         .send()
         .await?;
 
-    // 5. Stream the Data to Disk
     let mut file = File::create(target_path)?;
     
     while let Some(bytes) = resp.body.try_next().await? {
