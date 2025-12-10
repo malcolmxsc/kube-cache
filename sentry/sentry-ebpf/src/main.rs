@@ -7,6 +7,9 @@ use aya_ebpf::{
     bindings::xdp_action,
     maps::HashMap,
 };
+use sentry_ebpf::disk::block_rq_complete;
+use sentry_ebpf::net::tcp_connect;
+use sentry_ebpf::gpu::gpu_probe_placeholder;
 
 // 1. Define the Map (The Scoreboard)
 #[map]
@@ -42,4 +45,11 @@ fn try_sentry(_ctx: XdpContext) -> Result<u32, ()> {
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
+}
+
+// Dummy function to ensure imports are used and code is linked
+fn _linker_fix() {
+    let _ = block_rq_complete(unsafe { core::mem::zeroed() });
+    let _ = tcp_connect(unsafe { core::mem::zeroed() });
+    gpu_probe_placeholder();
 }

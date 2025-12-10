@@ -18,8 +18,11 @@ spec:
       hostPID: true
       containers:
         - name: sentry
-          image: sentry:v1
+          image: sentry:v3
           imagePullPolicy: Never # Local development
+          env:
+            - name: RUST_LOG
+              value: info
           securityContext:
             privileged: true # Required for loading eBPF
             capabilities:
@@ -30,8 +33,15 @@ spec:
             - name: bpf-fs
               mountPath: /sys/fs/bpf
               mountPropagation: Bidirectional
+            - name: debug-fs
+              mountPath: /sys/kernel/debug
+              mountPropagation: Bidirectional
       volumes:
         - name: bpf-fs
           hostPath:
             path: /sys/fs/bpf
+            type: Directory
+        - name: debug-fs
+          hostPath:
+            path: /sys/kernel/debug
             type: Directory
