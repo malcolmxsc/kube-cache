@@ -11,12 +11,12 @@ RUN apt-get update && apt-get install -y \
 
 # Create a dummy project to cache dependencies
 WORKDIR /usr/src/kube-cache
-COPY Cargo.toml Cargo.lock ./
+COPY operator/Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release
 
 # Copy the REAL source code
-COPY src ./src
+COPY operator/src ./src
 RUN touch src/main.rs
 RUN cargo build --release
 

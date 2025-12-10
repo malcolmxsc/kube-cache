@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sentry
+  namespace: default
+  labels:
+    app: sentry
+spec:
+  selector:
+    matchLabels:
+      app: sentry
+  template:
+    metadata:
+      labels:
+        app: sentry
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: sentry
+          image: sentry:v1
+          imagePullPolicy: Never # Local development
+          securityContext:
+            privileged: true # Required for loading eBPF
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - NET_ADMIN
+          volumeMounts:
+            - name: bpf-fs
+              mountPath: /sys/fs/bpf
+              mountPropagation: Bidirectional
+      volumes:
+        - name: bpf-fs
+          hostPath:
+            path: /sys/fs/bpf
+            type: Directory

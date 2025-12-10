@@ -1,42 +1,27 @@
-[package]
-name = "kube-cache"
+[workspace]
+resolver = "2"
+members = [
+    "operator",
+    "sentry/sentry",
+    "sentry/sentry-common",
+    "sentry/sentry-ebpf"
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
 
-[dependencies]
-# --- CORE ---
-home = "=0.5.9"
-base64ct = "=1.6.0"
-kube = { version = "=0.96.0", features = ["runtime", "derive", "client"] }
-k8s-openapi = { version = "0.23.0", features = ["v1_26"] }
-
-# --- AWS ---
-aws-config = "1.1.7"
-aws-sdk-s3 = "1.17.0"
-
-# --- ASYNC & UTILS ---
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# --- OBSERVABILITY (THE NEW STUFF) ---
-# Tracing = The core library for instrumentation
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-opentelemetry = "0.23" 
-
-# OpenTelemetry = The standard for sending data to Grafana
-opentelemetry = "0.22"
-opentelemetry_sdk = { version = "0.22", features = ["rt-tokio"] }
-opentelemetry-otlp = "0.15" # Sends traces via gRPC to Tempo
-opentelemetry-semantic-conventions = "0.14"
-
-# Metrics (Prometheus)
-axum = "0.7"
-prometheus = "0.13"
-opentelemetry-prometheus = "0.15"
-
-# --- SECURITY ---
-rustls = { version = "0.23", features = ["ring"] }
-webpki-roots = "0.26"
+[workspace.dependencies]
+aya = { version = "0.13", features = ["async_tokio"] }
+aya-ebpf = "0.1"
+aya-log = "0.2"
+aya-log-ebpf = "0.1"
+clap = { version = "4.1", features = ["derive"] }
+env_logger = "0.10"
+log = "0.4"
+tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
+anyhow = "1"
+which = "4.0"
+libc = "0.2"
