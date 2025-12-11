@@ -8,7 +8,7 @@ use aya_ebpf::{
     maps::HashMap,
 };
 use sentry_ebpf::disk::block_rq_complete;
-use sentry_ebpf::net::tcp_connect;
+use sentry_ebpf::net::{tcp_connect, tcp_connect_end};
 use sentry_ebpf::gpu::gpu_probe_placeholder;
 
 // 1. Define the Map (The Scoreboard)
@@ -51,5 +51,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 fn _linker_fix() {
     let _ = block_rq_complete(unsafe { core::mem::zeroed() });
     let _ = tcp_connect(unsafe { core::mem::zeroed() });
+    let _ = sentry_ebpf::net::tcp_connect_end(unsafe { core::mem::zeroed() });
     gpu_probe_placeholder();
 }

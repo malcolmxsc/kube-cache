@@ -13,6 +13,10 @@ log = "0.4"
 tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
 anyhow = "1"
 sentry-common = { path = "../sentry-common", features = ["user"] }
+prometheus = "0.13"
+tiny_http = "0.12"
+bytes = "1"
+libc = "0.2"
 
 [[bin]]
 name = "sentry"

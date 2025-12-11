@@ -13,18 +13,22 @@ spec:
     metadata:
       labels:
         app: sentry
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/metrics"
     spec:
       hostNetwork: true
       hostPID: true
       containers:
         - name: sentry
-          image: sentry:v3
-          imagePullPolicy: Never # Local development
+          image: sentry:v4
+          imagePullPolicy: Never
           env:
             - name: RUST_LOG
               value: info
           securityContext:
-            privileged: true # Required for loading eBPF
+            privileged: true
             capabilities:
               add:
                 - SYS_ADMIN
@@ -45,3 +49,25 @@ spec:
           hostPath:
             path: /sys/kernel/debug
             type: Directory
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentry
+  namespace: default
+  labels:
+    app: sentry
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: sentry
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+      protocol: TCP
+  clusterIP: None # Headless service, we want individual pod IPs
