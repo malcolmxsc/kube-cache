@@ -1,4 +1,4 @@
-use aya::programs::{Xdp, XdpFlags, KProbe, TracePoint};
+use aya::programs::{Xdp, XdpFlags, KProbe, TracePoint, UProbe};
 use aya::{include_bytes_aligned, Ebpf};
 use aya_log::EbpfLogger;
 use clap::Parser;
@@ -111,6 +111,20 @@ async fn main() -> Result<(), anyhow::Error> {
         tp.load()?;
         tp.attach("block", "block_rq_complete")?;
         println!("💾 Sentry TracePoint Attached to block/block_rq_complete");
+    }
+
+    {
+        // GPU Probe Attachment
+        let gpu_probe: &mut UProbe = bpf.program_mut("cuda_launch_kernel").unwrap().try_into()?;
+        gpu_probe.load()?;
+        
+        // Target: /users/lib/wsl/lib/libcuda.so.1 (WSL2 Shim)
+        const LIB_CUDA: &str = "/usr/lib/wsl/lib/libcuda.so.1";
+        
+        match gpu_probe.attach(None::<&str>, 0x23067, LIB_CUDA, None) {
+             Ok(_) => println!("🚀 Sentry GPU Probe Attached to {} (Offset 0x23067)", LIB_CUDA),
+             Err(e) => warn!("Failed to attach GPU probe: {}", e),
+        }
     }
     
     // 1.5 Get a handle to the PerfEventArray (Create AFTER probes to avoid borrow conflicts)

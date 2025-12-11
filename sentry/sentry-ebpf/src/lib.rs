@@ -2,6 +2,7 @@
 
 use aya_ebpf::{
     macros::map,
+    programs::ProbeContext,
     maps::PerfEventArray,
 };
 use sentry_common::ProbeEvent;

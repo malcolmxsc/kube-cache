@@ -140,3 +140,10 @@ spec:
 **Problem:** Reactive caching still incurs latency for the first pod.
 
 **Plan:** Integrate with Prometheus metrics to detect traffic spikes (e.g., "9am Login Rush"). The operator will proactively pre-warm idle nodes with weights before the Autoscaler even spins up the new Pods.
+
+## ⚠️ Known Limitations
+
+### GPU Observability on WSL2
+The GPU uprobe (`cudaLaunchKernel`) is implemented in the `sentry-ebpf` crate but **remains inactive when running on WSL2**.
+- **Reason:** The Linux Kernel cannot attach `uprobes` to files projected via `virtio-fs` (the mechanism used to mount Windows drivers into WSL2 instances). The `perf_event_open` syscall fails with an error when targeting the NVIDIA driver shim (`libcuda.so.1`) located in `/usr/lib/wsl/lib`.
+- **Requirement:** This feature requires a native Linux host or a bare-metal Kubernetes cluster where the NVIDIA drivers are on a standard ext4/xfs filesystem.

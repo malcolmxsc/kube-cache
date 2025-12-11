@@ -22,7 +22,7 @@ spec:
       hostPID: true
       containers:
         - name: sentry
-          image: sentry:v4
+          image: sentry:v6
           imagePullPolicy: Never
           env:
             - name: RUST_LOG
