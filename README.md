@@ -2,8 +2,48 @@
 
 **Sentry** is a high-performance, zero-overhead observability agent built in **Rust**. It uses **eBPF (Extended Berkeley Packet Filter)** to hook directly into the Linux Kernel, capturing microsecond-level metrics for Network Latency and Disk I/O without requiring any changes to the target applications (sidecar-less).
 
-![Architecture](https://via.placeholder.com/800x400?text=Sentry+Architecture:+Kernel+to+Grafana)
-*(Note: Replace with actual architecture diagram if available)*
+```mermaid
+graph TD
+    subgraph KERNEL["🟥 Kernel Space (eBPF)"]
+        Target[("Target App (Pods)")]
+        subgraph Probes
+            NetProbe["🔌 kprobe/tcp_connect"]
+            DiskProbe["💾 tracepoint/block_rq_complete"]
+        end
+        Map[("📦 eBPF Map (RingBuffer)")]
+    end
+
+    subgraph USER["🟦 User Space (Rust)"]
+        Agent["🦀 Sentry Agent"]
+        Loop["⚡ Async Event Loop"]
+        Metrics["📊 /metrics Endpoint"]
+    end
+
+    subgraph OBS["🟩 Observability Stack"]
+        Prom["🔥 Prometheus"]
+        Graf["💹 Grafana"]
+    end
+
+    Target -->|Syscalls| NetProbe
+    Target -->|Block I/O| DiskProbe
+    NetProbe -->|Write Event| Map
+    DiskProbe -->|Write Event| Map
+    
+    Map -->|Poll| Agent
+    Agent -->|Process| Loop
+    Loop -->|Expose| Metrics
+    
+    Prom -->|Scrape| Metrics
+    Graf -->|Query| Prom
+
+    classDef kernel fill:#ffe6e6,stroke:#ff3333,stroke-width:2px;
+    classDef user fill:#e6f3ff,stroke:#3366ff,stroke-width:2px;
+    classDef obs fill:#e6fffa,stroke:#00cc99,stroke-width:2px;
+
+    class Target,NetProbe,DiskProbe,Map kernel;
+    class Agent,Loop,Metrics user;
+    class Prom,Graf obs;
+```
 
 ## 🚀 Why This Exists
 Traditional observability tools (sidecars) introduce latency and consume user-space resources. Sentry solves this by moving collection to the **Kernel Space**, allowing for:
